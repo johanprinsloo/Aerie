@@ -15,41 +15,64 @@ Existing ground control stations (QGroundControl, Mission Planner) are excellent
 
 Bolting these capabilities onto a C++/Qt or C#/.NET GCS means maintaining a heavy fork against an upstream you don't control.
 
+## Use Case: Building Inspection with Autonomous Fire Detection
+
+A property management company operates a drone to perform routine visual inspections of a large commercial building complex. An operator at the base station plans a survey mission in QGroundControl — a series of waypoints that fly the drone in a grid pattern over the rooftops and along the building facades, capturing video throughout.
+
+The operator launches the mission. The drone takes off and begins its planned route. On the base station, Aerie's vision pipeline is processing the live video feed in real time, running a detection model trained to recognize structural damage, water pooling, HVAC anomalies, and fire or smoke.
+
+Midway through the survey, as the drone passes a section of rooftop near waypoint 5 of 12, the vision pipeline detects what appears to be a small fire near an HVAC unit — smoke and visible flame, confidence 94%. Aerie geocodes the detection: the fire is at a specific latitude and longitude on the southeast corner of Building C's roof.
+
+Aerie's AI agent receives this detection along with the current mission context. It evaluates the situation: a fire is an immediate safety concern, high confidence, and the drone is about to fly away from it on its planned route. The agent decides this is critical and takes several actions within seconds:
+
+- It sends an alert to the facility manager and the operator via webhook and SMS, including the geocoded location, a description of the detection, and a frame capture.
+- It commands the drone to leave its planned route and reposition to a loiter point with a clear view of the fire.
+- It sets a Region of Interest on the fire's coordinates so the gimbal keeps the camera pointed at it.
+- It sends a status message that appears in QGroundControl's message feed: *"AERIE: Fire detected at Building C SE roof — observing."*
+
+The operator in QGroundControl sees the drone depart its planned path and begin loitering. The original mission is still loaded — the drone hasn't forgotten it. The operator can watch the live video to confirm the fire, take manual control if needed, or let the agent continue observing while emergency services respond.
+
+Twenty minutes later, the situation is handled. The operator tells the agent to "Resume Mission" in QGroundControl (or the agent does so autonomously based on a configured timeout). The drone returns to waypoint 6 and continues the survey as if nothing happened — except now there's a logged, geocoded detection event with video, telemetry, and the agent's reasoning for the decision, all available for post-flight review.
+
+Without Aerie, the operator would have had to watch the video feed continuously and react manually — or worse, review the footage after landing and discover the fire too late.
+
+With Aerie the operator does not need to be at the base station at all, they can communicate with the agent over Text or Voice on their phone.
+
 ## Architecture
 
 Aerie doesn't replace your GCS — it runs alongside it. The key insight is that ArduPilot's autopilot is the single source of truth, and any number of MAVLink peers can observe and command it simultaneously. QGroundControl (or Mission Planner) remains the human operator's interface; Aerie adds the intelligence layer.
 
 ```
-                         ┌──────────────────┐
-                         │    ArduPilot FC   │
-                         │  (single source   │
-                         │    of truth)      │
-                         └────────┬─────────┘
-                                  │ MAVLink (serial/UDP)
-                                  │
-                         ┌────────┴─────────┐
-                         │    MAVProxy /     │
-                         │  mavlink-router   │
-                         │  (message router) │
-                         └──┬─────┬──────┬──┘
-                            │     │      │
-               ┌────────────┘     │      └────────────┐
-               │                  │                    │
-               ▼                  ▼                    ▼
-      ┌─────────────┐   ┌────────────────┐   ┌────────────────┐
-      │     QGC /    │   │  Video + ML    │   │   AI Agent     │
-      │   Mission    │   │  Pipeline      │   │                │
-      │   Planner    │   │                │   │  Consumes:     │
-      │              │   │  GStreamer →   │   │  - telemetry   │
-      │  (human      │   │  YOLO/custom  │   │  - detections  │
-      │   operator)  │   │  model →      │   │                │
-      │              │   │  detections    │   │  Emits:        │
-      │              │   │  + geocoding   │   │  - MAV commands│
-      └─────────────┘   └───────┬────────┘   │  - alerts      │
-                                │             │  - STATUSTEXT  │
-                                │ detections  │                │
-                                └────────────►│                │
-                                              └────────────────┘
+                    ┌───────────────────┐
+                    │    ArduPilot FC   │
+                    │  (single source   │
+                    │    of truth)      │
+                    └────────┬──────────┘
+                             │ MAVLink (serial/UDP)
+                             │
+                    ┌────────┴──────────┐
+                    │    MAVProxy /     │
+                    │  mavlink-router   │
+                    │  (message router) │
+                    └──┬─────┬──────┬───┘
+                       │     │      │
+          ┌────────────┘     │      └────────────┐
+          │                  │                   │
+          ▼                  ▼                   ▼
+    ┌─────────────┐  ┌────────────────┐  ┌────────────────┐
+    │     QGC /   │  │  Video + ML    │  │   AI Agent     │
+    │   Mission   │  │  Pipeline      │  │                │
+    │   Planner   │  │                │  │  Consumes:     │
+    │             │  │  GStreamer →   │  │  - telemetry   │
+    │  (human     │  │  YOLO/custom   │  │  - detections  │
+    │   operator) │  │  model →       │  │                │
+    │             │  │  detections    │  │  Emits:        │
+    │             │  │  + geocoding   │  │  - MAV commands│
+    └─────────────┘  └───────┬────────┘  │  - alerts      │
+                             │           │  - STATUSTEXT  │
+                             │ detections│                │
+                             └──────────►│                │
+                                         └────────────────┘
 ```
 
 ### Component Responsibilities
