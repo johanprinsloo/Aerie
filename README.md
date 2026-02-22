@@ -42,38 +42,76 @@ With Aerie the operator does not need to be at the base station at all, they can
 
 Aerie doesn't replace your GCS — it runs alongside it. The key insight is that ArduPilot's autopilot is the single source of truth, and any number of MAVLink peers can observe and command it simultaneously. QGroundControl (or Mission Planner) remains the human operator's interface; Aerie adds the intelligence layer.
 
+The drone has two independent downlinks to the base station:
+
+- **MAVLink telemetry/command link** — Low-bandwidth, bidirectional. Carries vehicle state, GPS, mission progress, and accepts commands. Typically over a SiK radio, Herelink, or IP radio.
+- **Digital video link** — High-bandwidth, typically unidirectional (drone → ground). Carries the camera feed. Received at the base station via HDMI framegrabber, RTSP/UDP stream, or proprietary receiver (DJI, Herelink, etc.). This path is completely out-of-band from MAVLink.
+
+
 ```
-                    ┌───────────────────┐
-                    │    ArduPilot FC   │
-                    │  (single source   │
-                    │    of truth)      │
-                    └────────┬──────────┘
-                             │ MAVLink (serial/UDP)
-                             │
-                    ┌────────┴──────────┐
-                    │    MAVProxy /     │
-                    │  mavlink-router   │
-                    │  (message router) │
-                    └──┬─────┬──────┬───┘
-                       │     │      │
-          ┌────────────┘     │      └────────────┐
-          │                  │                   │
-          ▼                  ▼                   ▼
-    ┌─────────────┐  ┌────────────────┐  ┌────────────────┐
-    │     QGC /   │  │  Video + ML    │  │   AI Agent     │
-    │   Mission   │  │  Pipeline      │  │                │
-    │   Planner   │  │                │  │  Consumes:     │
-    │             │  │  GStreamer →   │  │  - telemetry   │
-    │  (human     │  │  YOLO/custom   │  │  - detections  │
-    │   operator) │  │  model →       │  │                │
-    │             │  │  detections    │  │  Emits:        │
-    │             │  │  + geocoding   │  │  - MAV commands│
-    └─────────────┘  └───────┬────────┘  │  - alerts      │
-                             │           │  - STATUSTEXT  │
-                             │ detections│                │
-                             └──────────►│                │
-                                         └────────────────┘
+                              ┌──────────────────────────────────┐
+                              │           DRONE                  │
+                              │                                  │
+                              │  ┌──────────┐    ┌────────────┐  │
+                              │  │ ArduPilot│    │   Camera / │  │
+                              │  │    FC    │    │   Gimbal   │  │
+                              │  └────┬─────┘    └─────┬──────┘  │
+                              └───────┼────────────────┼─────────┘
+                                      │                │
+                           MAVLink    │                │  Video
+                        (telemetry +  │                │  (HDMI/IP/
+                          commands)   │                │   proprietary)
+                                      │                │
+                              ┌───────┴──┐        ┌────┴─────────┐
+                              │Telemetry │        │  Video Rx /  │
+                              │  Radio   │        │ Framegrabber │
+                              └───────┬──┘        └────┬─────────┘
+                                      │                │
+            ══════════════════════════════════════════════════════════════════════
+                                          BASE STATION
+            ══════════════════════════════════════════════════════════════════════
+                                      │                │
+                             ┌────────┴──────────┐     │
+                             │    MAVProxy /     │     │
+                             │  mavlink-router   │     │
+                             │  (message router) │     │
+                             └──┬─────┬──────┬───┘     │
+                                │     │      │         │
+               ┌────────────────┘     │      │         │
+               │                      │      │         │
+               ▼                      │      ▼         ▼
+      ┌──────────────┐                │  ┌────────────────┐
+      │    QGC /     │                │  │  Video + ML    │
+      │   Mission    │                │  │  Pipeline      │
+      │   Planner    │                │  │ (aerie-vision) │
+      │              │                │  │                │
+      │  (human      │  telemetry     │  │ Video in ──►   │
+      │   operator)  │  for geocoding │  │ Detection ──►  │
+      └──────────────┘                │  │ Geocoding ──►  │
+                                      │  │ Events out     │
+                                      │  └──────┬─────────┘
+                                      │         │
+                                      ▼         │ detections
+                                ┌────────────────┐
+                                │   AI Agent     │
+                                │ (aerie-agent)  │
+                                │                │
+                                │ Consumes:      │
+                                │ - telemetry    │
+                                │ - detections   │
+                                │                │
+                                │ Emits:         │
+                                │ - MAV commands │
+                                │ - alerts       │
+                                │ - STATUSTEXT   │
+                                └────────────────┘
 ```
+
+
+`aerie-vision` receives **two independent inputs**: the video stream directly from the video receiver, and a MAVLink telemetry feed from MAVProxy (used to correlate each video frame with the drone's position, altitude, and gimbal angle for geocoding detections). It does not send or receive drone commands — it is a pure observation pipeline.
+
+`aerie-agent` also receives **two inputs**: the MAVLink telemetry stream and the detection events published by `aerie-vision`. Unlike the vision pipeline, the agent sends commands back through MAVProxy to the autopilot.
+
 
 ### Component Responsibilities
 
