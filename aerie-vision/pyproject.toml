@@ -1,0 +1,31 @@
+[project]
+name = "aerie-vision"
+version = "0.1.0"
+description = "Video ingest and ML detection pipeline for Aerie drone supervision"
+requires-python = ">=3.10"
+dependencies = [
+    "opencv-python>=4.9",
+    "numpy>=1.26",
+    "pydantic>=2.0",
+    "pydantic-settings>=2.0",
+    "rich>=13.0",
+]
+
+[project.optional-dependencies]
+headless = ["opencv-python-headless>=4.9"]
+yolo = [
+    "ultralytics>=8.3",
+    "clip @ git+https://github.com/ultralytics/CLIP.git",
+]
+onnx = ["onnxruntime>=1.17"]
+macos = ["pyobjc-framework-AVFoundation>=10.0; sys_platform == 'darwin'"]
+
+[dependency-groups]
+dev = ["pytest>=8.0", "pytest-timeout>=2.2", "ruff>=0.4"]
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

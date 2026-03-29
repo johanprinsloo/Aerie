@@ -1,0 +1,95 @@
+from __future__ import annotations
+
+from pydantic import Field
+from pydantic_settings import BaseSettings
+
+
+class PipelineConfig(BaseSettings):
+    """Configuration for the aerie-vision pipeline.
+
+    Values are read from environment variables prefixed with ``AERIE_VISION_``
+    (e.g. ``AERIE_VISION_SOURCE=0``).
+    """
+
+    model_config = {"env_prefix": "AERIE_VISION_", "protected_namespaces": ()}
+
+    # -- Video ingest ---------------------------------------------------------
+
+    source: str = Field(
+        default="0",
+        description="Video source: device index, file path, or RTSP URL",
+    )
+    viewer_enabled: bool = Field(default=True, description="Enable the raw MJPEG web viewer")
+    viewer_host: str = Field(default="0.0.0.0", description="Viewer HTTP bind address")
+    viewer_port: int = Field(default=8090, ge=1, le=65535, description="Raw viewer HTTP port")
+    model_max_fps: float = Field(
+        default=5.0,
+        gt=0,
+        description="Maximum frame rate delivered to the detection model",
+    )
+    loop_video_file: bool = Field(
+        default=True,
+        description="Loop video files instead of stopping at end",
+    )
+    reconnect_delay: float = Field(
+        default=2.0,
+        gt=0,
+        description="Seconds between reconnection attempts on source loss",
+    )
+
+    # -- Detection ------------------------------------------------------------
+
+    detector_model: str = Field(
+        default="",
+        description='Model path ("yoloe-11s.pt"), or "" to disable detection',
+    )
+    detector_confidence: float = Field(
+        default=0.25,
+        ge=0,
+        le=1,
+        description="Minimum detection confidence threshold",
+    )
+    detector_classes: list[str] = Field(
+        default_factory=list,
+        description="YOLOE open-vocab text prompts (e.g. fire, smoke)",
+    )
+    detector_device: str = Field(
+        default="",
+        description='Inference device: "" = auto, "cpu", "cuda:0", "mps"',
+    )
+
+    # -- Annotated viewer -----------------------------------------------------
+
+    annotated_viewer_enabled: bool = Field(
+        default=True,
+        description="Enable the annotated MJPEG web viewer (requires detection)",
+    )
+    annotated_viewer_port: int = Field(
+        default=8091,
+        ge=1,
+        le=65535,
+        description="Annotated viewer HTTP port",
+    )
+
+    # -- Text output ----------------------------------------------------------
+
+    jsonl_output: str = Field(
+        default="",
+        description='"" = disabled, "-" = stdout, or a file path for JSONL detection records',
+    )
+    console_output: bool = Field(
+        default=True,
+        description="Print human-readable detection summaries to stderr",
+    )
+
+    # -- Video recording ------------------------------------------------------
+
+    record_path: str = Field(
+        default="",
+        description='"" = disabled, otherwise output MP4 file path',
+    )
+    record_fps: float = Field(
+        default=0.0,
+        ge=0,
+        description="Recording FPS (0 = match model inference rate)",
+    )
