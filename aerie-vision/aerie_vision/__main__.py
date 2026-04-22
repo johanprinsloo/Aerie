@@ -44,7 +44,13 @@ def main(argv: list[str] | None = None) -> None:
     det = parser.add_argument_group("detection")
     det.add_argument(
         "--model", default=None,
-        help='Detection model path (e.g. "yoloe-11s.pt"), or "mock" for testing',
+        help=(
+            'Detection model to use (default: "rfdetr-medium"). '
+            'RF-DETR sizes: rfdetr-nano, rfdetr-small, rfdetr-medium, rfdetr-large, '
+            'rfdetr-xlarge, rfdetr-2xlarge. '
+            'Ultralytics models: "yolo26n.pt", "yoloe-11s-seg.pt", etc. '
+            'Use "mock" for testing without a GPU.'
+        ),
     )
     det.add_argument(
         "--confidence", type=float, default=None,

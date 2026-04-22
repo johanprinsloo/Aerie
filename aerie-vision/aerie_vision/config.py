@@ -40,8 +40,13 @@ class PipelineConfig(BaseSettings):
     # -- Detection ------------------------------------------------------------
 
     detector_model: str = Field(
-        default="",
-        description='Model path ("yoloe-11s.pt"), or "" to disable detection',
+        default="rfdetr-medium",
+        description=(
+            'Detection model: "rfdetr-medium" (default), other RF-DETR sizes '
+            '("rfdetr-nano/small/large/xlarge/2xlarge"), '
+            'ultralytics model path ("yolo26n.pt", "yoloe-11s-seg.pt"), '
+            'or "" to disable detection'
+        ),
     )
     detector_confidence: float = Field(
         default=0.25,

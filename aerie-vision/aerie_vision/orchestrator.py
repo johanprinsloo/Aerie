@@ -22,8 +22,10 @@ logger = logging.getLogger(__name__)
 class VisionPipeline:
     """Orchestrate video ingest, detection, and all output sinks.
 
-    When ``config.detector_model`` is empty, runs in ingest-only mode
-    (backward-compatible with the bare :class:`Pipeline`).
+    The default model is ``rfdetr-medium`` (RF-DETR).  Model names starting with
+    ``rfdetr-`` are routed to :class:`~detection.rfdetr_detector.RFDETRDetector`;
+    all other paths are handled by :class:`~detection.ultralytics_detector.UltralyticsDetector`.
+    Set ``config.detector_model`` to ``""`` to disable detection entirely.
     """
 
     def __init__(self, config: PipelineConfig | None = None) -> None:
@@ -115,6 +117,22 @@ class VisionPipeline:
 
         if model == "mock":
             return MockDetector(name="mock")
+
+        if model.lower().startswith("rfdetr-"):
+            try:
+                from .detection.rfdetr_detector import RFDETRDetector
+
+                return RFDETRDetector(
+                    model_name=model,
+                    confidence=self._config.detector_confidence,
+                    device=self._config.detector_device,
+                    name=model,
+                )
+            except ImportError:
+                logger.warning(
+                    "rfdetr not installed — reinstall aerie-vision: uv sync"
+                )
+                raise
 
         try:
             from .detection.ultralytics_detector import UltralyticsDetector
