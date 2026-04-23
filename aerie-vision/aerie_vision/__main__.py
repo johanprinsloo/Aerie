@@ -65,6 +65,41 @@ def main(argv: list[str] | None = None) -> None:
         help='Inference device: "" = auto, "cpu", "cuda:0", "mps"',
     )
 
+    # -- Segmentation ---------------------------------------------------------
+    seg = parser.add_argument_group("segmentation")
+    seg.add_argument(
+        "--segmenter", default=None,
+        help=(
+            'Segmentation model: "sam3" (Meta SAM 3 via Ultralytics, requires '
+            '`uv sync --extra sam3` and a manually-downloaded sam3.pt), '
+            '"mock" (testing), or omit to disable. When set, --model is ignored.'
+        ),
+    )
+    seg.add_argument(
+        "--segmenter-classes", nargs="*", default=None,
+        help="Open-vocab text prompts for SAM3 (e.g. fire smoke person)",
+    )
+    seg.add_argument(
+        "--segmenter-confidence", type=float, default=None,
+        help="Minimum mask confidence (default: 0.3)",
+    )
+    seg.add_argument(
+        "--segmenter-device", default=None,
+        help='Inference device for segmenter: "" = auto, "cuda:0", "mps", "cpu"',
+    )
+    seg.add_argument(
+        "--segmenter-jsonl", default=None,
+        help='Segmentation JSONL output: "-" for stdout, or a file path',
+    )
+    seg.add_argument(
+        "--segmenter-weights", default=None,
+        help=(
+            'Path to SAM 3 weights file (default: "sam3.pt"). '
+            'Anything with "sam3" in the stem routes to the SAM 3 builder. '
+            'Pass e.g. "sam3_1/sam3.1_multiplex.pt" to try SAM 3.1.'
+        ),
+    )
+
     # -- Output ---------------------------------------------------------------
     out = parser.add_argument_group("output")
     out.add_argument(
@@ -140,6 +175,18 @@ def main(argv: list[str] | None = None) -> None:
         overrides["record_path"] = args.record
     if args.record_fps is not None:
         overrides["record_fps"] = args.record_fps
+    if args.segmenter is not None:
+        overrides["segmenter_model"] = args.segmenter
+    if args.segmenter_classes is not None:
+        overrides["segmenter_classes"] = args.segmenter_classes
+    if args.segmenter_confidence is not None:
+        overrides["segmenter_confidence"] = args.segmenter_confidence
+    if args.segmenter_device is not None:
+        overrides["segmenter_device"] = args.segmenter_device
+    if args.segmenter_jsonl is not None:
+        overrides["segmenter_jsonl_output"] = args.segmenter_jsonl
+    if args.segmenter_weights is not None:
+        overrides["segmenter_weights"] = args.segmenter_weights
 
     config = PipelineConfig(**overrides)  # type: ignore[arg-type]
     vision = VisionPipeline(config)
@@ -162,7 +209,7 @@ def main(argv: list[str] | None = None) -> None:
     logging.info("VisionPipeline running. Press Ctrl-C to stop.")
     if config.viewer_enabled:
         logging.info("Raw viewer:       http://localhost:%d/", config.viewer_port)
-    if config.detector_model and config.annotated_viewer_enabled:
+    if (config.detector_model or config.segmenter_model) and config.annotated_viewer_enabled:
         logging.info("Annotated viewer: http://localhost:%d/", config.annotated_viewer_port)
 
     try:

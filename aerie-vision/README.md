@@ -22,6 +22,7 @@ heavyweight ML dependencies:
 ```bash
 uv sync --extra yolo   # adds ultralytics (YOLOE, YOLO26, YOLOv8, ...)
 uv sync --extra onnx   # adds onnxruntime  (production ONNX inference)
+uv sync --extra sam3   # bumps ultralytics to >=8.3.237 for Meta SAM 3 support
 ```
 
 ## Quick start
@@ -484,6 +485,215 @@ pipeline.stop()
 The `on_result` callback is the extension point where geocoding (Phase 4.3)
 and event publishing (Phase 4.4) will plug in.
 
+## Segmentation (SAM 3)
+
+When `segmenter_model` is set, segmentation runs **instead of** the detector
+(they are mutually exclusive in this MVP). The backend is Meta's SAM 3 via
+the [Ultralytics integration](https://github.com/ultralytics/ultralytics/pull/22897)
+(merged in `ultralytics 8.3.237`, Dec 2025).
+
+### Reality check before you start
+
+The text-prompt + video-tracking + live-stream combination that early
+write-ups about SAM 3 advertised **does not exist in Ultralytics 8.3.237**.
+We confirmed this by reading the installed source after running into runtime
+errors — see [Limitations in Ultralytics 8.3.237](#limitations-in-ultralytics-83237)
+below.
+
+What's actually supported here today:
+
+| Source                  | Mode                          | Text prompts | Tracker IDs |
+|-------------------------|-------------------------------|--------------|-------------|
+| Webcam / RTSP / `int`   | Segment-everything per frame  | No (ignored) | No          |
+| Video file (`.mp4` etc.)| Same per-frame mode           | No (ignored) | No          |
+
+If you actually want **text prompts + tracking on live video**, jump to
+[YOLOE-seg as the live alternative](#yoloe-seg-as-the-live-alternative).
+SAM 3 in this project is currently most useful as a high-quality
+segment-everything model for offline / slow-rate work, and as a foundation
+for future Ultralytics releases that wire up the live text+tracker path.
+
+### Install
+
+```bash
+uv sync --extra sam3
+```
+
+This pulls `ultralytics>=8.3.237` plus the transitive deps Ultralytics
+otherwise tries to AutoUpdate at runtime (`timm`, `pandas`, `lap`, `clip`).
+Declaring them up front avoids the AutoUpdate path, which can silently
+install into the wrong site-packages (see [Troubleshooting](#troubleshooting)).
+
+**Manual weights download** — Ultralytics does not auto-fetch SAM 3 weights:
+
+1. Accept the gated-model terms at <https://huggingface.co/facebook/sam3>.
+2. Download `sam3.pt` (or `sam3n.pt` for the nano variant) into the working
+   directory or your Ultralytics cache.
+
+No separate BPE vocab is needed — Ultralytics' SAM 3 text encoder uses
+CLIP's bundled `SimpleTokenizer`, which ships in the `clip` package.
+
+**Python / hardware**: confirmed working on Python 3.10 (Ultralytics
+maintainer-verified for image mode). CUDA is the only path with real-time
+performance; MPS is best-effort and CPU is impractical (single-frame
+inference takes seconds to tens of seconds because the segment-everything
+mode runs SAM forward for ~1024 grid-sampled points per frame).
+
+### Quick start
+
+```bash
+uv run python -m aerie_vision \
+  --source 0 \
+  --segmenter sam3
+```
+
+Open the annotated viewer at <http://localhost:8091/> to see translucent
+masks per detected object. JSONL output is optional:
+
+```bash
+uv run python -m aerie_vision \
+  --source path/to/clip.mp4 \
+  --segmenter sam3 \
+  --segmenter-jsonl detections.jsonl
+```
+
+To point at a non-default checkpoint (e.g. nano for speed, or experimenting
+with SAM 3.1 multiplex weights):
+
+```bash
+uv run python -m aerie_vision \
+  --source 0 \
+  --segmenter sam3 \
+  --segmenter-weights sam3_1/sam3.1_multiplex.pt
+```
+
+`--segmenter-classes` is **accepted but ignored** in SAM 3 mode — a warning
+is logged if set. Ultralytics does not plumb text into the live path
+regardless of the model variant. See limitations below.
+
+### What `Sam3SourceRunner` actually does
+
+- Instantiates `from ultralytics import SAM` with the chosen weights.
+- Calls `model(source=..., stream=True, conf=..., show=False, save=False)`
+  with **no prompts**, which routes through `SAM3Predictor.inference()` and
+  falls through to `SAM.generate()` — segment-everything per frame.
+- Each yielded `Results` object carries one mask per detected region. We
+  convert to `InstanceMask` with positional IDs `0..N-1` (no tracker, so IDs
+  do not persist between frames).
+- Each captured frame is republished into the pipeline's `FrameBus` so the
+  raw MJPEG viewer on :8090 keeps working in SAM 3 mode.
+- The orchestrator's `_on_seg_result` callback writes the annotated overlay
+  (port 8091) and centroid-only JSONL (`instance_id`, `label`, `confidence`,
+  `bbox`, `centroid`, `area_px` — never mask pixels).
+- Because Ultralytics' `model(...)` owns ingest internally, the project's
+  `FrameGrabber` is **not** started in SAM 3 mode (two cv2 captures of the
+  same source would fight). The orchestrator constructs `Pipeline` with
+  `external_source=True` to suppress it.
+
+### Limitations in Ultralytics 8.3.237
+
+Two hard walls in the released package, established by reading the installed
+source after each one bit us:
+
+1. **`SAM(...).track(prompt=...)` does not exist.** The public `SAM` class
+   in `ultralytics/models/sam/model.py` hard-routes any `sam3*.pt` to
+   `SAM3Predictor` (the interactive image predictor — click/box/mask
+   prompts only). Its `predict()` packages prompts as
+   `dict(bboxes, points, labels)`; there is no `text` field. The CFG
+   validator rejects `prompt=`/`text=` as invalid YOLO overrides. Snippets
+   on the web that show `model.track(source=0, prompt="cell phone")` are
+   describing an API that does not exist in this release.
+
+2. **`SAM3VideoSemanticPredictor` (text + tracking) requires a video file.**
+   Its `init_state()` callback at `ultralytics/models/sam/predict.py:2607`
+   asserts `predictor.dataset.mode == "video"`. Ultralytics' source loaders
+   set:
+
+   - `mode == "video"` for `.mp4`/`.mov` files (known frame count)
+   - `mode == "stream"` for webcam (`source=0`) and RTSP (unknown length)
+
+   The video predictor needs `dataset.frames` for memory pre-allocation in
+   the inference state, so live streams hit the assertion immediately. We
+   verified this against `source=0`.
+
+Net: no Ultralytics path supports text-prompt video tracking on live
+streams in this release.
+
+### SAM 3.1 multiplex caveat
+
+Ultralytics 8.3.237 ships `build_sam3_image_model` and
+`build_interactive_sam3` only — there is no SAM 3.1 multiplex builder yet.
+The checkpoint loader uses `strict=False` and best-effort key remapping
+(`detector.*` → image encoder; `tracker.*` → memory_attention/memory_encoder),
+so the 3.5 GB `sam3.1_multiplex.pt` file will load and produce output, but:
+
+- Many multiplex-specific tracker keys are silently skipped because they
+  don't have a target slot in the non-multiplex architecture.
+- The detector / image-encoder half loads cleanly, so segment-everything
+  output should be reasonable.
+- Multiplex tracker behavior (which we don't actually exercise in live
+  mode anyway) is partially zero-initialized.
+
+If you want fully-supported SAM 3, download `sam3.pt` from the
+`facebook/sam3` repo and omit `--segmenter-weights`.
+
+### YOLOE-seg as the live alternative
+
+For the original drone-supervision use case (live video + text prompts like
+"fire"/"smoke"/"person" + persistent tracker IDs), the working tool today
+is **YOLOE-seg through the existing detector path**:
+
+```bash
+uv sync --extra yolo
+uv run python -m aerie_vision \
+  --source 0 \
+  --model yoloe-11s-seg.pt \
+  --classes "fire" "smoke" "person" \
+  --model-fps 5
+```
+
+This gives text prompts, real-time inference, and tracker IDs out of the
+box. No segmentation extra, no SAM 3 manual weights download, no live-stream
+limitations.
+
+### Troubleshooting
+
+**`requirements: Ultralytics requirement ['lap'] not found, AutoUpdate...`
+followed by a "restart runtime" warning, then nothing happens.** Ultralytics
+checks for runtime deps on first inference. If you launched from a `(base)`
+conda shell, the AutoUpdate's `pip install` finds the package in conda's
+site-packages (`/opt/homebrew/Caskroom/miniconda/base/lib/python3.10/...`),
+believes it succeeded, but the uv venv stays empty — every re-run loops
+the same warning. Worse, in a uv venv that has no standalone `pip` on PATH
+the AutoUpdate fails outright with `exit status 127`. Fixes:
+
+- Run `conda deactivate` before `uv run`, or launch from a non-conda shell.
+- Re-run `uv sync --extra sam3` so the declared transitive deps land in the
+  uv venv.
+
+**`FileNotFoundError: ... 'sam3.pt'`.** Ultralytics does not auto-download
+SAM 3 weights. Get them from <https://huggingface.co/facebook/sam3> and
+either drop `sam3.pt` in the directory you're running from, or pass
+`--segmenter-weights /path/to/sam3.pt`.
+
+**`SyntaxError: 'prompt' is not a valid YOLO argument`.** This is the
+"snippets-on-the-web" trap covered in
+[Limitations](#limitations-in-ultralytics-83237). The `prompt=` kwarg does
+not exist in this release.
+
+**`AssertionError` from `init_state` /
+`assert predictor.dataset.mode == "video"`.** Same — text-prompt video
+tracking can't ingest live sources. Use a video file source, or switch to
+YOLOE-seg.
+
+### Tests and dev without weights
+
+Use `--segmenter mock`. The mock path uses the per-frame `SegmentationRunner`
+with `MockSegmenter`, runs the normal `FrameGrabber`, and exercises every
+output sink (annotated viewer + JSONL) without touching Ultralytics or any
+real weights. See
+[tests/test_orchestrator_segmentation.py](tests/test_orchestrator_segmentation.py).
+
 ## Project layout
 
 ```
@@ -497,9 +707,10 @@ aerie_vision/
     model_sink.py           # Rate-limited ModelSink
     pipeline.py             # Ingest-layer Pipeline
     annotate.py             # Draw bboxes + labels onto frames
-    text_output.py          # JsonlOutputStream + ConsoleOutputStream
+    annotate_segmentation.py # Overlay translucent masks + per-instance labels
+    text_output.py          # JsonlOutputStream + SegmentationJsonlOutputStream + ConsoleOutputStream
     video_recorder.py       # VideoRecorder (cv2.VideoWriter wrapper)
-    orchestrator.py         # VisionPipeline (ingest + detection + outputs)
+    orchestrator.py         # VisionPipeline (ingest + detection|segmentation + outputs)
     detection/
         __init__.py
         types.py            # RawDetection, DetectionResult
@@ -510,6 +721,13 @@ aerie_vision/
         nms.py              # IoU + cross-model merge
         router.py           # DetectionRouter (single / parallel / escalation)
         runner.py           # DetectionRunner (thread consuming ModelSink)
+    segmentation/
+        __init__.py
+        types.py            # InstanceMask, SegmentationResult, TextPrompts
+        protocol.py         # Segmenter protocol (per-frame)
+        mock_segmenter.py   # Scripted mock (testing)
+        runner.py           # SegmentationRunner (per-frame, thread consuming ModelSink)
+        sam3_source_runner.py  # Ultralytics SAM 3 (source-driven, owns ingest)
 ```
 
 ## Tests

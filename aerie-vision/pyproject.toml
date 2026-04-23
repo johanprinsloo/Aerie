@@ -21,6 +21,27 @@ yolo = [
 ]
 onnx = ["onnxruntime>=1.17"]
 macos = ["pyobjc-framework-AVFoundation>=10.0; sys_platform == 'darwin'"]
+# Meta SAM 3 via Ultralytics (open-vocab promptable segmentation + tracking).
+# Image mode works on Python 3.10+; the video tracker (model.track) wants
+# Python 3.12+ and triton in practice. Weights are gated and NOT auto-downloaded:
+# fetch sam3.pt and bpe_simple_vocab_16e6.txt.gz manually from
+# https://huggingface.co/facebook/sam3
+sam3 = [
+    "ultralytics>=8.3.237",
+    # Ultralytics' SAM 3 builders import timm; not declared upstream.
+    # Listing it here avoids Ultralytics' runtime AutoUpdate (which can land
+    # in the wrong site-packages and force a "restart runtime" warning, or
+    # fail outright in a uv venv that has no standalone pip on PATH).
+    "timm>=1.0",
+    # model.track() writes per-frame tracker metadata via pandas.
+    "pandas>=2.0",
+    # BoT-SORT / ByteTrack uses Linear Assignment Problem solver for
+    # detection-to-tracklet matching. Required by every model.track() call.
+    "lap>=0.5.12",
+    # SAM 3's text encoder uses CLIP's SimpleTokenizer (vocab is bundled in
+    # the package, so no separate BPE vocab file download is needed).
+    "clip @ git+https://github.com/ultralytics/CLIP.git",
+]
 
 [dependency-groups]
 dev = ["pytest>=8.0", "pytest-timeout>=2.2", "ruff>=0.4"]

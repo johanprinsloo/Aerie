@@ -63,6 +63,50 @@ class PipelineConfig(BaseSettings):
         description='Inference device: "" = auto, "cpu", "cuda:0", "mps"',
     )
 
+    # -- Segmentation ---------------------------------------------------------
+
+    segmenter_model: str = Field(
+        default="",
+        description=(
+            'Segmentation model: "" = disabled, "sam3" = Meta SAM 3 via '
+            'Ultralytics (requires `uv sync --extra sam3` and a manually-'
+            'downloaded sam3.pt), "mock" = scripted segmenter for tests. '
+            'When set, the detector is disabled (mutually exclusive).'
+        ),
+    )
+    segmenter_classes: list[str] = Field(
+        default_factory=list,
+        description="Open-vocab text prompts for SAM3 (e.g. fire smoke person)",
+    )
+    segmenter_confidence: float = Field(
+        default=0.3,
+        ge=0,
+        le=1,
+        description="Minimum mask confidence threshold",
+    )
+    segmenter_device: str = Field(
+        default="",
+        description='Inference device: "" = auto, "cuda:0", "mps", "cpu"',
+    )
+    segmenter_jsonl_output: str = Field(
+        default="",
+        description=(
+            '"" = disabled, "-" = stdout, or a file path for JSONL '
+            'centroid-only segmentation records'
+        ),
+    )
+    segmenter_weights: str = Field(
+        default="sam3.pt",
+        description=(
+            'Path to the SAM 3 weights file. Anything containing "sam3" in '
+            'the stem is routed to the SAM 3 builder by Ultralytics. Examples: '
+            '"sam3.pt" (default), "sam3n.pt", or a path like '
+            '"sam3_1/sam3.1_multiplex.pt" (note: SAM 3.1 multiplex is not '
+            'fully supported by Ultralytics 8.3.237 — tracker weights load '
+            'with strict=False and may be partially zero-initialized).'
+        ),
+    )
+
     # -- Annotated viewer -----------------------------------------------------
 
     annotated_viewer_enabled: bool = Field(

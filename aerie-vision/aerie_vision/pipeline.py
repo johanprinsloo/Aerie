@@ -20,19 +20,27 @@ class Pipeline:
     FrameGrabber -> FrameBus -> ViewerSink + ModelSink.
     """
 
-    def __init__(self, config: PipelineConfig | None = None) -> None:
+    def __init__(
+        self,
+        config: PipelineConfig | None = None,
+        *,
+        external_source: bool = False,
+    ) -> None:
         self._config = config or PipelineConfig()
         self._bus = FrameBus()
 
         viewer_slot = self._bus.create_slot("viewer")
         model_slot = self._bus.create_slot("model")
 
-        self._grabber = FrameGrabber(
-            source=self._config.source,
-            bus=self._bus,
-            loop=self._config.loop_video_file,
-            reconnect_delay=self._config.reconnect_delay,
-        )
+        self._external_source = external_source
+        self._grabber: FrameGrabber | None = None
+        if not external_source:
+            self._grabber = FrameGrabber(
+                source=self._config.source,
+                bus=self._bus,
+                loop=self._config.loop_video_file,
+                reconnect_delay=self._config.reconnect_delay,
+            )
 
         self._viewer: ViewerSink | None = None
         if self._config.viewer_enabled:
@@ -47,18 +55,26 @@ class Pipeline:
             max_fps=self._config.model_max_fps,
         )
 
+        self._segmentation_sink: ModelSink | None = None
+
     # -- public API -----------------------------------------------------------
 
     def start(self) -> None:
         """Start all components (viewer first, then capture)."""
         if self._viewer is not None:
             self._viewer.start()
-        self._grabber.start()
-        logger.info("Pipeline running  source=%s", self._config.source)
+        if self._grabber is not None:
+            self._grabber.start()
+        logger.info(
+            "Pipeline running  source=%s  external_source=%s",
+            self._config.source,
+            self._external_source,
+        )
 
     def stop(self) -> None:
         """Stop all components cleanly."""
-        self._grabber.stop()
+        if self._grabber is not None:
+            self._grabber.stop()
         if self._viewer is not None:
             self._viewer.stop()
         logger.info("Pipeline stopped")
@@ -69,7 +85,23 @@ class Pipeline:
         return self._model_sink
 
     @property
-    def grabber(self) -> FrameGrabber:
+    def segmentation_sink(self) -> ModelSink:
+        """Lazily create and return the rate-limited sink for segmentation.
+
+        Created on first access so detection-only runs don't allocate an
+        unused slot.  Reuses ``model_max_fps`` for rate limiting.
+        """
+        if self._segmentation_sink is None:
+            slot = self._bus.create_slot("segmentation")
+            self._segmentation_sink = ModelSink(
+                slot=slot,
+                max_fps=self._config.model_max_fps,
+            )
+        return self._segmentation_sink
+
+    @property
+    def grabber(self) -> FrameGrabber | None:
+        """``None`` when the Pipeline was constructed with ``external_source=True``."""
         return self._grabber
 
     @property

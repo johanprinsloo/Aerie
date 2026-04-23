@@ -7,6 +7,7 @@ import sys
 from typing import IO
 
 from .detection.types import DetectionResult
+from .segmentation.types import SegmentationResult
 
 
 class JsonlOutputStream:
@@ -36,6 +37,56 @@ class JsonlOutputStream:
                     "model_name": d.model_name,
                 }
                 for d in result.detections
+            ],
+        }
+        fh.write(json.dumps(record, separators=(",", ":")) + "\n")
+        fh.flush()
+
+    def close(self) -> None:
+        if self._fh is not None and self._fh is not sys.stdout:
+            self._fh.close()
+        self._fh = None
+
+    def _ensure_open(self) -> IO[str]:
+        if self._fh is None:
+            if self._path == "-":
+                self._fh = sys.stdout
+            else:
+                self._fh = open(self._path, "a")  # noqa: SIM115
+        return self._fh
+
+
+class SegmentationJsonlOutputStream:
+    """Write one JSON object per :class:`SegmentationResult` to a file handle.
+
+    Centroid-only: mask pixels are never serialized.
+
+    Parameters
+    ----------
+    path:
+        ``"-"`` for stdout, otherwise a filesystem path (opened in append mode).
+    """
+
+    def __init__(self, path: str = "-") -> None:
+        self._path = path
+        self._fh: IO[str] | None = None
+
+    def write(self, result: SegmentationResult) -> None:
+        fh = self._ensure_open()
+        record = {
+            "frame_number": result.frame_number,
+            "timestamp": result.timestamp,
+            "inference_ms": round(result.inference_ms, 2),
+            "instances": [
+                {
+                    "instance_id": inst.instance_id,
+                    "label": inst.label,
+                    "confidence": round(inst.confidence, 4),
+                    "bbox": list(inst.bbox),
+                    "centroid": list(inst.centroid),
+                    "area_px": inst.area_px,
+                }
+                for inst in result.instances
             ],
         }
         fh.write(json.dumps(record, separators=(",", ":")) + "\n")
